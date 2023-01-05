@@ -1,0 +1,224 @@
+import RPi.GPIO as GPIO
+from signal import pause
+import time, serial, math #, os, pygame
+from adafruit_rplidar import RPLidar
+from bluedot import BlueDot
+import math
+#GPIO.setmode(GPIO.BOARD)
+
+steerservopin=4 #was7
+motorA1=27 #was 13 in BOARD mode
+motorA2=17 #was 11
+motorAEn=22 #was 15
+lidarspeedpin=23 # was 16
+
+GPIO.setup(steerservopin,GPIO.OUT)
+GPIO.setup(motorA1,GPIO.OUT)
+GPIO.setup(motorA2,GPIO.OUT)
+GPIO.setup(motorAEn,GPIO.OUT)
+GPIO.setup(lidarspeedpin,GPIO.OUT)
+
+GPIO.output(motorA1,GPIO.LOW)
+GPIO.output(motorA2,GPIO.LOW)
+
+speedservo = GPIO.PWM(motorAEn,1000)
+speedservo.start(0)
+speedservo.ChangeDutyCycle(0)
+
+lidar_speed=GPIO.PWM(lidarspeedpin, 100)  #1000 is frequency of pwm cycle
+lidar_speed.start(100)
+PORT_NAME = '/dev/ttyUSB0'
+lidar = RPLidar(None, PORT_NAME)
+
+
+steerservo = GPIO.PWM(steerservopin,50)
+steerservo.start(0)
+steeranglemax=110
+steeranglemin=70
+steeringchange=9
+steerangle=90  #90 is straight ahead
+steerservo.ChangeDutyCycle((steerangle/18))
+steerservo.ChangeDutyCycle(0)
+
+scanangdist=[0]*360
+datapointsperscan=200
+
+global stopDistThreshold
+global take_over
+take_over = False
+onlyStopDistThreshold = 30
+stopDistThreshold=50
+turnDistThreshold=100
+#bd = BlueDot()
+
+carWidth = 8.5 #inches, wheel to wheelww
+
+def carforward():
+    print("in car forward")
+    GPIO.output(motorA1,GPIO.LOW)
+    GPIO.output(motorA2,GPIO.HIGH)
+    for i in range (20):
+        speedservo.ChangeDutyCycle(70)
+    #GPIO.output(motorAEn,GPIO.HIGH)
+ 
+def carbackward():
+    print("in car backward")
+    GPIO.output(motorA1,GPIO.HIGH)
+    GPIO.output(motorA2,GPIO.LOW)
+    for i in range (20):
+        speedservo.ChangeDutyCycle(70)
+
+def carright():
+    global steerangle
+    print("in car right")
+    if steerangle+steeringchange<=steeranglemax:
+        steerangle=steerangle+steeringchange
+        steerservo.ChangeDutyCycle(2+(steerangle/18))
+        time.sleep(.35)
+        steerservo.ChangeDutyCycle(0)
+    
+def carleft():
+    global steerangle
+    print("in car left")
+    if steerangle-steeringchange>=steeranglemin:
+        steerangle=steerangle-steeringchange
+        steerservo.ChangeDutyCycle(2+(steerangle/18))
+        time.sleep(.35)
+        steerservo.ChangeDutyCycle(0)
+
+    
+def carstop():
+    print("in car stop")
+    GPIO.output(motorA1,GPIO.LOW)
+    GPIO.output(motorA2,GPIO.LOW)
+    GPIO.output(motorAEn,GPIO.LOW)
+    time.sleep(.5)
+
+def clearlidar():
+    for c in range(0,360):
+        scanangdist[c]=0  
+        
+def scanlidar():
+  turn_left = False
+  turn_right = False
+  braking = False 
+  lidar_speed.start(100)
+  lidar = RPLidar(None, PORT_NAME, timeout=3)
+  totaldatapoints=0
+  counter=0
+  for scan in lidar.iter_scans() : # record all ang and dist for a revolution (throws errors?)
+    for (_, angle, distance) in scan:
+        
+        distance /= 10
+       #print(distance,angle)
+        
+        if angle in range(20,60) and distance < turnDistThreshold and distance != 0 and distance > onlyStopDistThreshold: #detected left
+            print("Turn Left")
+            turn_left = True
+            if distance < stopDistThreshold:
+                print("Braking")
+                braking = True
+                
+        elif angle in range (20,60) and distance < onlyStopDistThreshold:
+            print("Only Brake!") #traction circle shows the limit of grip you have, look it up if you don't know
+            braking = True
+            turn_left = False
+            turn_right = False
+
+#elif angle in range(20,60) and distance > 0 and distance < stopDistThreshold: #stop and turn
+#             print("Turn Left/Brake")
+#             steerservo.ChangeDutyCycle(4)
+            
+        if (angle in range (320,360) or angle in range(0,20)) and distance < turnDistThreshold and distance != 0 and distance > onlyStopDistThreshold : #detected right
+            print("Turn Right")
+            turn_right = True
+            if distance < stopDistThreshold:
+                print("Braking")
+                braking = True
+                
+            elif angle in range (320,360) and distance < onlyStopDistThreshold:
+                print("Only Brake!") #traction circle shows the limit of grip you have, look it up if you don't know
+                braking = True
+                turn_right = False
+                turn_left = False
+                
+            elif (angle in range(0,60) or angle in range (320,360)) and distance > turnDistThreshold: #nothing
+                print("Clear")
+                clear = True
+                #bluetooth code
+                #for now just go straight because im lazy
+                GPIO.output(motorA1,GPIO.LOW)
+                GPIO.output(motorA2,GPIO.HIGH)
+                for i in range (20):
+                    speedservo.ChangeDutyCycle(70)
+                
+            if turn_right and turn_left and braking:
+                print("Confused!") #add something that goes for biggest gap
+                #turn right,brake
+                GPIO.output(motorA1,GPIO.HIGH)
+                GPIO.output(motorA2,GPIO.LOW)
+                for i in range (20):
+                    speedservo.ChangeDutyCycle(70)
+                GPIO.output(motorA1,GPIO.LOW)
+                GPIO.output(motorA2,GPIO.LOW)
+                GPIO.output(motorAEn,GPIO.LOW)
+                    
+                steerservo.ChangeDutyCycle(6)
+                
+            elif turn_right and turn_left:
+                print("Objects everywhere")
+                steerservo.ChangeDutyCycle(6)
+                
+                
+            elif turn_right and braking:
+                GPIO.output(motorA1,GPIO.HIGH)
+                GPIO.output(motorA2,GPIO.LOW)
+                for i in range (20):
+                    speedservo.ChangeDutyCycle(70)
+                GPIO.output(motorA1,GPIO.LOW)
+                GPIO.output(motorA2,GPIO.LOW)
+                GPIO.output(motorAEn,GPIO.LOW)
+                
+            elif turn_right:
+                steerservo.ChangeDutyCycle(6)
+                
+            elif turn_left and braking:
+                GPIO.output(motorA1,GPIO.HIGH)
+                GPIO.output(motorA2,GPIO.LOW)
+                for i in range (20):
+                    speedservo.ChangeDutyCycle(70)
+                GPIO.output(motorA1,GPIO.LOW)
+                GPIO.output(motorA2,GPIO.LOW)
+                GPIO.output(motorAEn,GPIO.LOW)
+                    
+                steerservo.ChangeDutyCycle(4)
+                
+            elif turn_left:
+                steerservo.ChangeDutyCycle(4)
+                
+            elif braking:
+                GPIO.output(motorA1,GPIO.HIGH)
+                GPIO.output(motorA2,GPIO.LOW)
+                for i in range (20):
+                    speedservo.ChangeDutyCycle(70)
+                GPIO.output(motorA1,GPIO.LOW)
+                GPIO.output(motorA2,GPIO.LOW)
+                GPIO.output(motorAEn,GPIO.LOW)
+                    
+            elif clear:
+                print("Clear")
+                
+            else:
+                print("I missed a case or something")
+            
+def printscanangdist():            
+  for p in range(0,360):
+    print("Angle,  ",p,"  Distance,   ",scanangdist[p])
+
+while True:
+    scanlidar()
+    
+        
+    
+  
+
